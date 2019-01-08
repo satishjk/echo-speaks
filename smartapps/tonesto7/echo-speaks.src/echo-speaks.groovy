@@ -1,7 +1,7 @@
 /**
  *  Echo Speaks SmartApp
  *
- *  Copyright 2018 Anthony Santilli
+ *  Copyright 2018, 2019 Anthony Santilli
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  *  in compliance with the License. You may obtain a copy of the License at:
@@ -17,14 +17,16 @@ import groovy.json.*
 import java.text.SimpleDateFormat
 include 'asynchttp_v1'
 
-String appVersion()	 { return "2.0.8" }
-String appModified() { return "2018-12-31" }
+Boolean isBeta() { return false }
+String appVersion()	 { return "2.1.2" }
+String appModified() { return "2019-01-07" }
 String appAuthor()	 { return "Anthony S." }
-String getAppImg(imgName) { return "https://raw.githubusercontent.com/tonesto7/echo-speaks/master/resources/icons/$imgName" }
+String getAppImg(imgName) { return "https://raw.githubusercontent.com/tonesto7/echo-speaks/${isBeta() ? "beta" : "master"}/resources/icons/$imgName" }
 String getPublicImg(imgName) { return "https://raw.githubusercontent.com/tonesto7/SmartThings-tonesto7-public/master/resources/icons/$imgName" }
 Map minVersions() { //These define the minimum versions of code this app will work with.
-    return [echoDevice: 207, server: 201]
+    return [echoDevice: 210, server: 210]
 }
+
 
 definition(
     name: "Echo Speaks",
@@ -48,6 +50,8 @@ preferences {
     page(name: "changeLogPage")
     page(name: "notifPrefPage")
     page(name: "servPrefPage")
+    page(name: "musicSearchTestPage")
+    page(name: "searchTuneInResultsPage")
     page(name: "broadcastTestPage")
     page(name: "setNotificationTimePage")
     page(name: "uninstallPage")
@@ -97,7 +101,7 @@ def mainPage() {
                     } else { paragraph title: "Discovered Devices:", "No Devices Available", state: "complete" }
                 }
                 def devPrefDesc = devicePrefsDesc()
-                href "devicePrefsPage", title: "Detection Preferences", description: "${devPrefDesc ? "Current Preferences:\n${devPrefDesc}\n\n" : ""}Tap to configure...", state: "complete", image: getAppImg("devices.png")
+                href "devicePrefsPage", title: "Device Detection\nPreferences", description: "${devPrefDesc ? "Current Preferences:\n${devPrefDesc}\n\n" : ""}Tap to configure...", state: "complete", image: getAppImg("devices.png")
             }
 
             section("Notifications:") {
@@ -105,8 +109,9 @@ def mainPage() {
                 href "notifPrefPage", title: "App and Device\nNotifications", description: (t0 ? "${t0}\n\nTap to modify" : "Tap to configure"), state: (t0 ? "complete" : null), image: getAppImg("notification2.png")
             }
 
-            section ("Application Preferences") {
+            section ("Application Preferences & Documentation:") {
                 href "settingsPage", title: "Manage Logging, and Metrics", description: "Tap to modify...", image: getAppImg("settings.png")
+                href url: documentationLink(), style: "internal", required: false, title: "View Documentation", description: "Tap to proceed", state: "complete", image: getAppImg("documentation.png")
             }
 
             if(!newInstall) {
@@ -114,18 +119,16 @@ def mainPage() {
                     def t0 = getServiceConfDesc()
                     href "servPrefPage", title: "Login Service\nSettings", description: (t0 ? "${t0}\n\nTap to modify" : "Tap to configure"), state: (t0 ? "complete" : null), image: getAppImg("settings.png")
                 }
-            }
-
-            section ("Broadcasts (Experimental)") {
-                href "broadcastTestPage", title: "Broadcast Test Page", description: "Tap to modify...", image: getAppImg("settings.png")
+                section ("Experimental Functions:") {
+                    href "broadcastTestPage", title: "Broadcast Test Page", description: "Tap to proceed...", image: getAppImg("broadcast.png")
+                    href "musicSearchTestPage", title: "Music Search Tests", description: "Tap to proceed...", image: getAppImg("music.png")
+                }
+                if(!state?.shownDevSharePage) { showDevSharePrefs() }
+                section("Donations:") {
+                    href url: textDonateLink(), style:"external", required: false, title: "Donations", description: "Tap to open browser", image: getAppImg("donate.png")
+                }
             }
             if(!newInstall) {
-                if(!state?.shownDevSharePage) {
-                    showDevSharePrefs()
-                }
-                section("Donations:") {
-                    href url: textDonateLink(), style:"external", required: false, title:"Donations", description:"Tap to open browser", image: getAppImg("donate.png")
-                }
                 section("Remove Everything:") {
                     href "uninstallPage", title: "Uninstall this App", description: "Tap to Remove...", image: getAppImg("uninstall.png")
                 }
@@ -177,10 +180,7 @@ def broadcastTestPage() {
         if(settings?.broadcastDevices) {
             section() {
                 input "performBroadcast", "bool", title: "Perform the Broadcast?", description: "", required: false, defaultValue: false, submitOnChange: true
-                if(performBroadcast) {
-                    executeBroadcast()
-
-                }
+                if(performBroadcast) { executeBroadcast() }
             }
         }
     }
@@ -203,6 +203,83 @@ private executeBroadcast() {
     }
     sendMultiSequenceCommand(seqItems, settings?.broadcastParallel)
     settingUpdate("performBroadcast", "false", "bool")
+}
+
+private executeTuneInSearch() {
+    Map params = [
+        uri: getAmazonUrl(),
+        path: "/api/tunein/search",
+        query: [ query: settings?.tuneinSearchQuery, mediaOwnerCustomerId: state?.deviceOwnerCustomerId ],
+        headers: [ "Cookie": getCookieVal(), "csrf": getCsrfVal() ],
+        requestContentType: "application/json",
+        contentType: "application/json"
+    ]
+    Map results = makeSyncronousReq(params, "get", "tuneInSearch") ?: [:]
+    return results
+}
+
+private executeMusicSearchTest() {
+    settingUpdate("performMusicTest", "false", "bool")
+    if(settings?.musicTestDevice && settings?.musicTestProvider && settings?.musicTestQuery) {
+        log.debug "Performing ${settings?.musicTestProvider} Music Search Test with Query: (${settings?.musicTestQuery}) on Device: (${settings?.musicTestDevice})"
+        settings?.musicTestDevice?.searchMusic(settings?.musicTestQuery as String, settings?.musicTestProvider as String)
+    }
+}
+
+def musicSearchTestPage() {
+    return dynamicPage(name: "musicSearchTestPage", uninstall: false, install: false) {
+        section("Test a Music Search on Device:") {
+            paragraph "Use this to test the search you discovered above directly on a device.", state: "complete"
+            Map testEnum = ["CLOUDPLAYER": "My Library", "AMAZON_MUSIC": "Amazon Music", "I_HEART_RADIO": "iHeartRadio", "PANDORA": "Pandora", "APPLE_MUSIC": "Apple Music", "TUNEIN": "TuneIn", "SIRIUSXM": "siriusXm", "SPOTIFY": "Spotify"]
+            input "musicTestProvider", "enum", title: "Select Music Provider to perform test", defaultValue: null, required: false, options: testEnum, submitOnChange: true, image: getAppImg("music.png")
+            if(musicTestProvider) {
+                input "musicTestQuery", "text", title: "Music Search term to test on Device", defaultValue: null, required: false, submitOnChange: true, image: getAppImg("search2.png")
+                if(settings?.musicTestQuery) {
+                    input "musicTestDevice", "device.echoSpeaksDevice", title: "Select a Device to Test Music Search", description: "Tap to select", multiple: false, required: false, submitOnChange: true, image: getAppImg("echo_speaks.1x.png")
+                    if(musicTestDevice) {
+                        input "performMusicTest", "bool", title: "Perform the Music Search Test?", description: "", required: false, defaultValue: false, submitOnChange: true, image: getAppImg("music.png")
+                        if(performMusicTest) { executeMusicSearchTest() }
+                    }
+                }
+            }
+        }
+        section("TuneIn Search Results:") {
+            paragraph "Enter a search phrase to query TuneIn to help you find the right search term to use in searchTuneIn() command.", state: "complete"
+            input "tuneinSearchQuery", "text", title: "Enter search phrase for TuneIn", defaultValue: null, required: false, submitOnChange: true, image: getAppImg("tunein.png")
+            if(settings?.tuneinSearchQuery) {
+                href "searchTuneInResultsPage", title: "View search results!", description: "Tap to proceed...", image: getAppImg("search2.png")
+            }
+        }
+    }
+}
+
+def searchTuneInResultsPage() {
+    return dynamicPage(name: "searchTuneInResultsPage", uninstall: false, install: false) {
+        def results = executeTuneInSearch()
+        section("Search Results: (Query: ${settings?.tuneinSearchQuery})") {
+            if(results?.browseList && results?.browseList?.size()) {
+                results?.browseList?.eachWithIndex { item, i->
+                    if(i < 25) {
+                        if(item?.browseList != null && item?.browseList?.size()) {
+                            item?.browseList?.eachWithIndex { item2, i2->
+                                String str = ""
+                                str += "ContentType: (${item2?.contentType})"
+                                str += "\nId: (${item2?.id})"
+                                str += "\nDescription: ${item2?.description}"
+                                paragraph title: "${item2?.name?.take(75)}", str, required: true, state: (!item2?.name?.contains("Not Supported") ? "complete" : null), image: item2?.image ?: ""
+                            }
+                        } else {
+                            String str = ""
+                            str += "ContentType: (${item?.contentType})"
+                            str += "\nId: (${item?.id})"
+                            str += "\nDescription: ${item?.description}"
+                            paragraph title: "${item?.name?.take(75)}", str, required: true, state: (!item?.name?.contains("Not Supported") ? "complete" : null), image: item?.image ?: ""
+                        }
+                    }
+                }
+            } else { paragraph "No Results found..." }
+        }
+    }
 }
 
 Map sequenceBuilder(cmd, val) {
@@ -276,7 +353,7 @@ private sendSequenceCommand(type, command, value) {
     sendAmazonCommand("POST", [
         uri: getAmazonUrl(),
         path: "/api/behaviors/preview",
-        headers: ["Cookie": state?.cookie?.cookie, "csrf": state?.cookie?.csrf],
+        headers: ["Cookie": getCookieVal(), "csrf": getCsrfVal()],
         requestContentType: "application/json",
         contentType: "application/json",
         body: seqObj
@@ -361,7 +438,7 @@ def servPrefPage() {
             "amazon.de":"Amazon.de",
             "amazon.it":"Amazon.it"
         ]
-        List localeOpts = ["en-US", "en-CA", "de-DE", "en-GB"]
+        List localeOpts = ["en-US", "en-CA", "de-DE", "en-GB", "it-IT"]
         Boolean herokuOn = (settings?.useHeroku == true)
         Boolean hubOn = (settings?.stHub != null)
         Boolean hasChild = (app.getChildDevices(true)?.size())
@@ -430,13 +507,16 @@ def servPrefPage() {
                     href url: "https://dashboard.heroku.com/apps/${getRandAppName()}/logs", style: "external", required: false, title: "Heroku App Logs", description: "Tap to proceed", image: getAppImg("heroku.png")
                 }
             }
-
+            section() {
+                input "refreshCookie", "bool", title: "Refresh Alexa Cookie?", description: "This will Refresh your Amazon Cookie.", required: false, defaultValue: false, submitOnChange: true, image: getPublicImg("reset.png")
+            }
+            if(settings?.refreshCookie == true) { runCookieRefresh() }
             section("Reset Options:", hideable:true, hidden: true) {
                 input "resetService", "bool", title: "Reset Service Data?", description: "This will clear all traces of the current service info and allow you to redeploy or reconfigure a new instance.\nLeave the page and come back after toggling.",
                     required: false, defaultValue: false, submitOnChange: true, image: getPublicImg("reset.png")
                 input "resetCookies", "bool", title: "Clear Stored Cookie Data?", description: "This will clear all stored cookie data.", required: false, defaultValue: false, submitOnChange: true, image: getPublicImg("reset.png")
                 if(settings?.resetService == true) { clearCloudConfig() }
-                if(settings?.resetCookies == true) { clearCookie() }
+                if(settings?.resetCookies == true) { clearCookieData() }
             }
         }
     }
@@ -559,7 +639,7 @@ def initialize() {
     subscribe(app, onAppTouch)
     if(!state?.resumeConfig) {
         runEvery5Minutes("healthCheck") // This task checks for missed polls, app updates, code version changes, and cloud service health
-        stateCleanup()
+        appCleanup()
         runEvery10Minutes("getEchoDevices") //This will reload the device list from Amazon
         validateCookie(true)
         runIn(15, "reInitDevices")
@@ -582,12 +662,20 @@ void settingUpdate(name, value, type=null) {
     else if (name && type == null){ app?.updateSetting(name.toString(), value) }
 }
 
+void settingRemove(name) {
+	logger("trace", "settingRemove($name)...")
+	if(name && settings?.containsKey(name)) { app?.deleteSetting("$name") }
+}
+
 mappings {
     path("/renderMetricData") { action: [GET: "renderMetricData"] }
     path("/receiveData")      { action: [POST: "processData"] }
     path("/config")            { action: [GET: "renderConfig"]  }
-    path("/cookie")           { action: [GET: "getCookie", POST: "storeCookie", DELETE: "clearCookie"] }
+    path("/cookie")           { action: [GET: "getCookieData", POST: "storeCookieData", DELETE: "clearCookieData"] }
 }
+
+String getCookieVal() { return (state?.cookieData && state?.cookieData.localCookie) ? state?.cookieData.localCookie as String : null }
+String getCsrfVal() { return (state?.cookieData && state?.cookieData.csrf) ? state?.cookieData.csrf as String : null }
 
 def clearCloudConfig() {
     settingUpdate("resetService", "false", "bool")
@@ -607,6 +695,7 @@ String getEnvParamsStr() {
     envParams["serviceDebug"] = (settings?.serviceDebug == true) ? "true" : "false"
     envParams["serviceTrace"] = (settings?.serviceTrace == true) ? "true" : "false"
     envParams["amazonDomain"] = settings?.amazonDomain as String
+    envParams["regionLocale"] = settings?.regionLocale as String
     envParams["refreshSeconds"] = settings?.refreshSeconds as String
     envParams["hostUrl"] = "${getRandAppName()}.herokuapp.com"
     // envParams["HEROKU_APP_NAME"] = "${getRandAppName()}"
@@ -632,12 +721,16 @@ private checkIfCodeUpdated() {
     return false
 }
 
-private stateCleanup() {
-    List items = ["availableDevices", "lastMsgDt", "consecutiveCmdCnt", "isRateLimiting", "versionData", "heartbeatScheduled", "serviceAuthenticated", ]
+private appCleanup() {
+    List items = ["availableDevices", "lastMsgDt", "consecutiveCmdCnt", "isRateLimiting", "versionData", "heartbeatScheduled", "serviceAuthenticated", "cookie"]
     items?.each { si-> if(state?.containsKey(si as String)) { state?.remove(si)} }
     state?.pollBlocked = false
     state?.resumeConfig = false
     state?.deviceRefreshInProgress = false
+    // Settings Cleanup
+    ["tuneinSearchQuery", "musicTestQuery", "musicTestDevice", "musicTestProvider", "performBroadcast", "performMusicTest", "broadcastDevices", "broadcastMessage", "broadcastParallel", "broadcastVolume"]?.each { sI->
+        if(settings?.containsKey(sI as String)) { settingRemove(sI as String) }
+    }
 }
 
 def onAppTouch(evt) {
@@ -677,36 +770,42 @@ def processData() {
     render contentType: "application/json", data: json, status: 200
 }
 
-def getCookie() {
-    log.trace "getCookie() Request Received..."
-    Map resp = state?.cookie ?: [:]
+def getCookieData() {
+    log.trace "getCookieData() Request Received..."
+    Map resp = state?.cookieData ?: [:]
     def json = new groovy.json.JsonOutput().toJson(resp)
     incrementCntByKey("getCookieCnt")
     render contentType: "application/json", data: json
 }
 
-def storeCookie() {
-    log.trace "storeCookie Request Received..."
-    if(request?.JSON && request?.JSON?.cookie && request?.JSON?.csrf) {
+def storeCookieData() {
+    log.trace "storeCookieData Request Received..."
+    if(request?.JSON && request?.JSON?.cookieData) {
+        log.trace "cookieData Received: ${request?.JSON?.cookieData?.keySet()}"
+        logger("trace", "cookieData Received: ${request?.JSON?.cookieData?.keySet()}")
         Map obj = [:]
-        obj?.cookie = request?.JSON?.cookie as String ?: null
-        obj?.csrf = request?.JSON?.csrf as String ?: null
-        state?.cookie = obj
+        request?.JSON?.cookieData?.each { k,v->
+            obj[k as String] = v as String
+        }
+        state?.cookieData = obj
         updCodeVerMap("server", request?.JSON?.version)
     }
-    if(state?.cookie?.cookie && state?.cookie?.csrf) {
-        log.info "Cookie Has been Updated... Re-Initializing SmartApp and to restart polling in 10 seconds..."
+    if(state?.cookieData?.localCookie && state?.cookieData?.csrf) {
+        log.info "Cookie Data has been Updated... Re-Initializing SmartApp and to restart polling in 10 seconds..."
         validateCookie(true)
+        state?.lastCookieRefresh = getDtNow()
         runIn(10, "initialize", [overwrite: true])
     }
 }
 
-def clearCookie() {
-    logger("trace", "clearCookie()")
+def clearCookieData(src=null) {
+    logger("trace", "clearCookieData(${src ?: ""})")
     settingUpdate("resetCookies", "false", "bool")
     state?.remove("cookie")
+    state?.remove("cookieData")
+    state?.remove("lastCookieRefresh")
     unschedule("getEchoDevices")
-    log.warn "Cookie has been cleared and Device Data Refreshes have been suspended..."
+    log.warn "Cookie Data has been cleared and Device Data Refreshes have been suspended..."
     updateChildAuth(false)
 }
 
@@ -717,7 +816,7 @@ private updateChildAuth(Boolean isValid) {
 private authEvtHandler(Boolean isAuth) {
     state?.authValid = (isAuth == true)
     if(isAuth == false && !state?.noAuthActive) {
-        clearCookie()
+        clearCookieData()
         noAuthReminder()
         sendMsg("${app.name} Amazon Login Issue", "Amazon Cookie Has Expired or is Missing!!! Please login again using the Heroku Web Config page...")
         runEvery1Hour("noAuthReminder")
@@ -741,13 +840,13 @@ Boolean isAuthValid(methodName) {
 }
 
 private validateCookie(frc=false) {
-    if((!frc && getLastCookieChkSec() <= 1800) || !state?.cookie || !state?.cookie?.cookie || !state?.cookie?.csrf) {
+    if((!frc && getLastCookieChkSec() <= 1800) || !getCookieVal() || !getCsrfVal()) {
         // if(!state?.cookie || !state?.cookie?.cookie || !state?.cookie?.csrf) { log.warn "Cannot Validate Cookie!  Missing required Cookie Data..." }
         // if(!frc && getLastCookieChkSec() <= 1800) { log.warn "Cannot Validate Cookie!  It's Too Soon to Check again..." }
         return
     }
     try {
-        def params = [uri: getAmazonUrl(), path: "/api/bootstrap", query: ["version": 0], headers: ["Cookie": state?.cookie?.cookie as String, "csrf": state?.cookie?.csrf as String], contentType: "application/json"]
+        def params = [uri: getAmazonUrl(), path: "/api/bootstrap", query: ["version": 0], headers: ["Cookie": getCookieVal(), "csrf": getCsrfVal()], contentType: "application/json"]
         asynchttp_v1.get(cookieValidResp, params, [execDt: now()])
     } catch(ex) {
         incrementCntByKey("err_app_cookieValidCnt")
@@ -755,10 +854,60 @@ private validateCookie(frc=false) {
     }
 }
 
+String toQueryString(Map m) {
+	return m.collect { k, v -> "${k}=${URLEncoder.encode(v?.toString(), "utf-8").replaceAll("\\+", "%20")}" }?.sort().join("&")
+}
+
+Integer getLastCookieRefreshSec() { return !state?.lastCookieRefresh ? 100000 : GetTimeDiffSeconds(state?.lastCookieRefresh, "getLastCookieRrshSec").toInteger() }
+private runCookieRefresh() {
+    Map params = [
+        uri: "https://${getRandAppName()}.herokuapp.com",
+        path: "/config",
+        contentType: "text/html",
+        requestContentType: "text/html",
+    ]
+    asynchttp_v1.get(wakeUpServerResp, params, [execDt: now()])
+    settingUpdate("refreshCookie", "false", "bool")
+}
+
+def wakeUpServerResp(response, data) {
+    log.trace "wakeUpServerResp..."
+    if (response.hasError()) {
+        log.error "message: ${response?.getErrorMessage()}"
+    }
+    def rData = response?.data ?: null
+    if (rData) {
+        // log.debug "rData: $rData"
+        log.debug "wakeUpServer Completed... | Process Time: (${data?.execDt ? (now()-data?.execDt) : 0}ms)"
+        Map cookieData = state?.cookieData ?: [:]
+        if (!cookieData || !cookieData?.loginCookie || !cookieData?.refreshToken) {
+            log.error("Required Registration data is missing for Cookie Refresh")
+            return
+        }
+        Map params = [
+            uri: "https://${getRandAppName()}.herokuapp.com",
+            path: "/refreshCookie"
+        ]
+        asynchttp_v1.get(cookieRefreshResp, params, [execDt: now()])
+    }
+}
+
+def cookieRefreshResp(response, data) {
+    log.trace "cookieRefreshResp..."
+    if (response.hasError()) {
+        log.error "message: ${response?.getErrorMessage()}"
+    }
+    Map rData = response?.json ?: [:]
+    if (rData && rData?.result && rData?.result?.size()) {
+        log.debug "refreshAlexaCookie Completed | Process Time: (${data?.execDt ? (now()-data?.execDt) : 0}ms)"
+        // log.debug "refreshAlexaCookie Response: ${rData?.result}"
+    }
+}
+
 private apiHealthCheck(frc=false) {
     // if(!frc || (getLastApiChkSec() <= 1800)) { return }
     try {
-        def params = [uri: getAmazonUrl(), path: "/api/ping", query: ["_": ""], headers: ["Cookie": state?.cookie?.cookie as String, "csrf": state?.cookie?.csrf as String], contentType: "plain/text"]
+        def params = [uri: getAmazonUrl(), path: "/api/ping", query: ["_": ""], headers: ["Cookie": getCookieVal(), "csrf": getCsrfVal()], contentType: "plain/text"]
         httpGet(params) { resp->
             log.debug "API Health Check Resp: (${resp?.getData()})"
             return (resp?.getData().toString() == "healthy")
@@ -773,6 +922,7 @@ def cookieValidResp(response, data) {
     // log.trace "cookieValidResp..."
     if (response.hasError()) {
         if(response?.getStatus() == 401) {
+            log.error "cookieValidResp Status: (${response.getStatus()})"
             authEvtHandler(false)
             state?.lastCookieChkDt = getDtNow()
             return
@@ -830,8 +980,8 @@ private getEchoDevices() {
         path: "/api/devices-v2/device",
         query: [ cached: true ],
         headers: [
-            "Cookie": state?.cookie?.cookie as String,
-            "csrf": state?.cookie?.csrf as String
+            "Cookie": getCookieVal(),
+            "csrf": getCsrfVal()
         ],
         requestContentType: "application/json",
         contentType: "application/json",
@@ -847,8 +997,8 @@ private getMusicProviders() {
         query: [ skillId: "amzn1.ask.1p.music" ],
         headers: [
             "Routines-Version": "1.1.210292",
-            "Cookie": state?.cookie?.cookie as String,
-            "csrf": state?.cookie?.csrf as String
+            "Cookie": getCookieVal(),
+            "csrf": getCsrfVal()
         ],
         requestContentType: "application/json",
         contentType: "application/json"
@@ -938,7 +1088,7 @@ def receiveEventData(Map evtData, String src) {
                     echoValue["authValid"] = (state?.authValid == true)
                     echoValue["amazonDomain"] = (settings?.amazonDomain ?: "amazon.com")
                     echoValue["regionLocale"] = (settings?.regionLocale ?: "en-US")
-                    echoValue["cookie"] = state?.cookie
+                    echoValue["cookie"] = [cookie: getCookieVal(), csrf: getCsrfVal()]
                     echoValue["deviceStyle"] = getDeviceStyle(echoValue?.deviceFamily as String, echoValue?.deviceType as String)
                     // log.debug "deviceStyle: ${echoValue?.deviceStyle}"
 
@@ -1075,7 +1225,7 @@ public sendPlaybackStateToClusterMembers(whaKey, response, data) {
     if (clusterMembers) {
         def clusterMemberDevices = getDevicesFromSerialList(clusterMembers)
         clusterMemberDevices.each {
-            it.getPlaybackStateHandler(response, data, true)
+            it?.getPlaybackStateHandler(response, data, true)
         }
     } else {
         // The lookup will fail during initial refresh because echoDeviceMap isn't available yet
@@ -1150,6 +1300,7 @@ private healthCheck() {
         return
     }
     validateCookie()
+    if(getLastCookieRefreshSec() > 432000) { runCookieRefresh() }
     if(!getOk2Notify()) { return }
     missPollNotify((settings?.sendMissedPollMsg == true), (state?.misPollNotifyMsgWaitVal ?: 3600))
     appUpdateNotify()
@@ -1301,6 +1452,7 @@ public sendMsg(String msgTitle, String msg, Boolean showEvt=true, Map pushoverMa
     }
     return sent
 }
+String documentationLink() { return "https://tonesto7.github.io/echo-speaks-docs" }
 String textDonateLink() { return "https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=HWBN4LB9NMHZ4" }
 String getAppEndpointUrl(subPath)   { return "${apiServerUrl("/api/smartapps/installations/${app.id}${subPath ? "/${subPath}" : ""}?access_token=${state.accessToken}")}" }
 String getLocalEndpointUrl(subPath) { return "${getLocalApiServerUrl()}/apps/${app?.id}${subPath ? "/${subPath}" : ""}?access_token=${state?.accessToken}" }
@@ -1324,7 +1476,7 @@ private buildPushMessage(List devices,Map msgData,timeStamp=false){if(!devices||
 /******************************************
 |       Changelog Logic
 ******************************************/
-String changeLogData() { return getWebData([uri: "https://raw.githubusercontent.com/tonesto7/echo-speaks/master/resources/changelog.txt", contentType: "text/plain; charset=UTF-8"], "changelog") }
+String changeLogData() { return getWebData([uri: "https://raw.githubusercontent.com/tonesto7/echo-speaks/${isBeta() ? "beta" : "master"}/resources/changelog.txt", contentType: "text/plain; charset=UTF-8"], "changelog") }
 Boolean showChgLogOk() { return (state?.isInstalled && state?.installData?.shownChgLog != true) }
 def changeLogPage() {
     def execTime = now()
@@ -1443,6 +1595,7 @@ private createMetricsDataJson(rendAsMap=false) {
             installDt: state?.installData?.dt,
             updatedDt: state?.installData?.updatedDt,
             timeZone: location?.timeZone?.ID?.toString(),
+            authValid: (state?.authValid == true),
             stateUsage: "${stateSizePerc()}%",
             amazonDomain: settings?.amazonDomain,
             serverPlatform: state?.onHeroku ? "Cloud" : "Local",
@@ -1535,7 +1688,7 @@ private checkVersionData(now = false) { //This reads a JSON file from GitHub wit
 
 private getConfigData() {
     def params = [
-        uri: "https://raw.githubusercontent.com/tonesto7/echo-speaks/master/resources/appData.json",
+        uri: "https://raw.githubusercontent.com/tonesto7/echo-speaks/${isBeta() ? "beta" : "master"}/resources/appData.json",
         contentType: "application/json"
     ]
     def data = getWebData(params, "appData", false)
@@ -1811,7 +1964,7 @@ def renderConfig() {
                     </div>
                     <div class="my-2 text-center">
                         <h5>2. Tap Button to deploy to Heroku</h5>
-                        <a href="https://heroku.com/deploy?template=https://github.com/tonesto7/echo-speaks-server/tree/dev${getEnvParamsStr()}">
+                        <a href="https://heroku.com/deploy?template=https://github.com/tonesto7/echo-speaks-server/tree/${isBeta() ? "dev" : "master"}${getEnvParamsStr()}">
                             <img src="https://www.herokucdn.com/deploy/button.svg" alt="Deploy">
                         </a>
                     </div>
@@ -1823,9 +1976,6 @@ def renderConfig() {
         \$("#copyName").on("click", function () {
             console.log("click")
             \$(this).select();
-        });
-        \$('#generateEmail').click(function() {
-            \$("#generateEmail").attr("href", "mailto:example@email.com?subject=Echo Speaks URL Info&body=${getAppEndpointUrl("receiveData")}").attr("target", "_blank");
         });
     </script>
     """
